@@ -70,18 +70,37 @@ type TableRuntime struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	startOnce   sync.Once
-	stopOnce    sync.Once
-	mu          sync.RWMutex
-	state       TableState
-	history     []PokerEvent
-	totalEvents int
-	historyCap  int
-	subscribers map[string]chan PokerEvent
+	startOnce        sync.Once
+	stopOnce         sync.Once
+	mu               sync.RWMutex
+	state            TableState
+	history          []PokerEvent
+	totalEvents      int
+	historyCap       int
+	subscriberBuffer int
+	subscribers      map[string]chan PokerEvent
 }
 
 // NewTableRuntime constructs a cancellable runtime for one active table.
 func NewTableRuntime(id, sessionID string, createdAt time.Time) *TableRuntime {
+	return NewTableRuntimeWithConfig(id, sessionID, createdAt, RuntimeConfig{})
+}
+
+// RuntimeConfig controls bounded in-memory runtime behavior.
+type RuntimeConfig struct {
+	HistoryLimit     int
+	SubscriberBuffer int
+}
+
+// NewTableRuntimeWithConfig constructs a runtime with explicit in-memory limits.
+func NewTableRuntimeWithConfig(id, sessionID string, createdAt time.Time, config RuntimeConfig) *TableRuntime {
+	if config.HistoryLimit <= 0 {
+		config.HistoryLimit = DefaultHistoryLimit
+	}
+	if config.SubscriberBuffer <= 0 {
+		config.SubscriberBuffer = DefaultSubscriberBuffer
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &TableRuntime{
@@ -95,8 +114,9 @@ func NewTableRuntime(id, sessionID string, createdAt time.Time) *TableRuntime {
 			BlindLevel: "1/2",
 			Status:     "runtime_initialized",
 		},
-		historyCap:  DefaultHistoryLimit,
-		subscribers: make(map[string]chan PokerEvent),
+		historyCap:       config.HistoryLimit,
+		subscriberBuffer: config.SubscriberBuffer,
+		subscribers:      make(map[string]chan PokerEvent),
 	}
 }
 
@@ -190,7 +210,7 @@ func (r *TableRuntime) Subscribe(buffer int) (string, <-chan PokerEvent, error) 
 		return "", nil, ErrRuntimeStopped
 	}
 	if buffer <= 0 {
-		buffer = DefaultSubscriberBuffer
+		buffer = r.subscriberBuffer
 	}
 
 	id, err := newID("sub_", 8)

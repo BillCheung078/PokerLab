@@ -53,20 +53,42 @@ type App struct {
 	staticDir string
 	sessions  *session.Manager
 	tables    *table.Manager
+	config    Config
+}
+
+// Config controls HTTP-layer stream behavior.
+type Config struct {
+	StreamHeartbeatInterval time.Duration
+	StreamReplayLimit       int
+	StreamSubscriberBuffer  int
 }
 
 // NewApp constructs the Phase 1 application shell.
 func NewApp(renderer *templates.Renderer) *App {
-	return NewAppWithServices(renderer, session.NewManager(), table.NewManager())
+	return NewAppWithServicesAndConfig(renderer, session.NewManager(), table.NewManager(), Config{})
 }
 
 // NewAppWithServices constructs the application with explicit backing services.
 func NewAppWithServices(renderer *templates.Renderer, sessions *session.Manager, tables *table.Manager) *App {
+	return NewAppWithServicesAndConfig(renderer, sessions, tables, Config{})
+}
+
+// NewAppWithServicesAndConfig constructs the application with explicit backing services and stream tuning.
+func NewAppWithServicesAndConfig(renderer *templates.Renderer, sessions *session.Manager, tables *table.Manager, config Config) *App {
 	if sessions == nil {
 		sessions = session.NewManager()
 	}
 	if tables == nil {
 		tables = table.NewManager()
+	}
+	if config.StreamHeartbeatInterval <= 0 {
+		config.StreamHeartbeatInterval = 15 * time.Second
+	}
+	if config.StreamReplayLimit <= 0 {
+		config.StreamReplayLimit = sim.DefaultHistoryLimit
+	}
+	if config.StreamSubscriberBuffer <= 0 {
+		config.StreamSubscriberBuffer = sim.DefaultSubscriberBuffer
 	}
 
 	return &App{
@@ -74,6 +96,7 @@ func NewAppWithServices(renderer *templates.Renderer, sessions *session.Manager,
 		staticDir: filepath.Join(projectRoot(), "web", "static"),
 		sessions:  sessions,
 		tables:    tables,
+		config:    config,
 	}
 }
 
@@ -197,7 +220,7 @@ func (a *App) handleSessionStream(w stdhttp.ResponseWriter, r *stdhttp.Request) 
 
 	tableIDs := a.sessions.ListTableIDs(sess.ID)
 	subscriptions := make([]runtimeSubscription, 0, len(tableIDs))
-	replay := make([]sim.PokerEvent, 0, len(tableIDs)*sim.DefaultHistoryLimit)
+	replay := make([]sim.PokerEvent, 0, len(tableIDs)*a.config.StreamReplayLimit)
 
 	for _, tableID := range tableIDs {
 		tbl, ok := a.tables.Get(tableID)
@@ -210,7 +233,7 @@ func (a *App) handleSessionStream(w stdhttp.ResponseWriter, r *stdhttp.Request) 
 			continue
 		}
 
-		subID, ch, err := runtime.Subscribe(0)
+		subID, ch, err := runtime.Subscribe(a.config.StreamSubscriberBuffer)
 		if err != nil {
 			continue
 		}
@@ -220,7 +243,11 @@ func (a *App) handleSessionStream(w stdhttp.ResponseWriter, r *stdhttp.Request) 
 			runtime: runtime,
 			ch:      ch,
 		})
-		replay = append(replay, runtime.Snapshot().History...)
+		history := runtime.Snapshot().History
+		if len(history) > a.config.StreamReplayLimit {
+			history = history[len(history)-a.config.StreamReplayLimit:]
+		}
+		replay = append(replay, history...)
 	}
 
 	defer func() {
@@ -245,7 +272,7 @@ func (a *App) handleSessionStream(w stdhttp.ResponseWriter, r *stdhttp.Request) 
 	}
 	flusher.Flush()
 
-	liveEvents := make(chan sim.PokerEvent, max(1, len(subscriptions))*sim.DefaultSubscriberBuffer)
+	liveEvents := make(chan sim.PokerEvent, max(1, len(subscriptions))*a.config.StreamSubscriberBuffer)
 	var forwarders sync.WaitGroup
 	for _, subscription := range subscriptions {
 		forwarders.Add(1)
@@ -274,7 +301,7 @@ func (a *App) handleSessionStream(w stdhttp.ResponseWriter, r *stdhttp.Request) 
 		}(subscription)
 	}
 
-	heartbeat := time.NewTicker(15 * time.Second)
+	heartbeat := time.NewTicker(a.config.StreamHeartbeatInterval)
 	defer heartbeat.Stop()
 
 	for {

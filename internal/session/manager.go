@@ -37,16 +37,52 @@ type Manager struct {
 	sessions   map[string]*Session
 	cookieName string
 	maxTables  int
+	cookie     http.Cookie
 	now        func() time.Time
 }
 
 // NewManager constructs a session manager with local-development defaults.
 func NewManager() *Manager {
+	return NewManagerWithConfig(Config{})
+}
+
+// Config controls cookie behavior and per-session limits.
+type Config struct {
+	CookieName     string
+	MaxTables      int
+	CookieSecure   bool
+	CookieMaxAge   time.Duration
+	CookieSameSite http.SameSite
+}
+
+// NewManagerWithConfig constructs a session manager with explicit settings.
+func NewManagerWithConfig(config Config) *Manager {
+	if config.CookieName == "" {
+		config.CookieName = DefaultCookieName
+	}
+	if config.MaxTables <= 0 {
+		config.MaxTables = DefaultMaxTables
+	}
+	if config.CookieMaxAge <= 0 {
+		config.CookieMaxAge = 24 * time.Hour
+	}
+	if config.CookieSameSite == 0 {
+		config.CookieSameSite = http.SameSiteLaxMode
+	}
+
 	return &Manager{
 		sessions:   make(map[string]*Session),
-		cookieName: DefaultCookieName,
-		maxTables:  DefaultMaxTables,
-		now:        time.Now,
+		cookieName: config.CookieName,
+		maxTables:  config.MaxTables,
+		cookie: http.Cookie{
+			Name:     config.CookieName,
+			Path:     "/",
+			HttpOnly: true,
+			Secure:   config.CookieSecure,
+			MaxAge:   int(config.CookieMaxAge / time.Second),
+			SameSite: config.CookieSameSite,
+		},
+		now: time.Now,
 	}
 }
 
@@ -78,13 +114,9 @@ func (m *Manager) GetOrCreate(w http.ResponseWriter, r *http.Request) (*Session,
 	m.sessions[id] = sess
 	m.mu.Unlock()
 
-	http.SetCookie(w, &http.Cookie{
-		Name:     m.cookieName,
-		Value:    id,
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-	})
+	cookie := m.cookie
+	cookie.Value = id
+	http.SetCookie(w, &cookie)
 
 	return cloneSession(sess), nil
 }

@@ -6,6 +6,13 @@ import (
 	"time"
 )
 
+const (
+	// DefaultIntraHandDelay controls event pacing within one hand.
+	DefaultIntraHandDelay = 550 * time.Millisecond
+	// DefaultHandPause controls the pause between completed hands.
+	DefaultHandPause = 1700 * time.Millisecond
+)
+
 // EngineConfig controls pacing for the simulated hand loop.
 type EngineConfig struct {
 	IntraHandDelay time.Duration
@@ -22,18 +29,18 @@ type Engine struct {
 // NewEngine constructs the default local-development simulator.
 func NewEngine() *Engine {
 	return NewEngineWithConfig(EngineConfig{
-		IntraHandDelay: 550 * time.Millisecond,
-		HandPause:      1700 * time.Millisecond,
+		IntraHandDelay: DefaultIntraHandDelay,
+		HandPause:      DefaultHandPause,
 	})
 }
 
 // NewEngineWithConfig constructs an engine with explicit pacing controls.
 func NewEngineWithConfig(config EngineConfig) *Engine {
 	if config.IntraHandDelay <= 0 {
-		config.IntraHandDelay = 550 * time.Millisecond
+		config.IntraHandDelay = DefaultIntraHandDelay
 	}
 	if config.HandPause <= 0 {
-		config.HandPause = 1700 * time.Millisecond
+		config.HandPause = DefaultHandPause
 	}
 
 	return &Engine{

@@ -23,27 +23,34 @@ type managedTable struct {
 
 // Manager stores active table metadata in memory.
 type Manager struct {
-	mu     sync.RWMutex
-	tables map[string]*managedTable
-	now    func() time.Time
-	engine *sim.Engine
+	mu            sync.RWMutex
+	tables        map[string]*managedTable
+	now           func() time.Time
+	engine        *sim.Engine
+	runtimeConfig sim.RuntimeConfig
 }
 
 // NewManager constructs an in-memory table registry.
 func NewManager() *Manager {
-	return NewManagerWithEngine(sim.NewEngine())
+	return NewManagerWithConfig(sim.NewEngine(), sim.RuntimeConfig{})
 }
 
 // NewManagerWithEngine constructs an in-memory table registry with an explicit simulator.
 func NewManagerWithEngine(engine *sim.Engine) *Manager {
+	return NewManagerWithConfig(engine, sim.RuntimeConfig{})
+}
+
+// NewManagerWithConfig constructs an in-memory table registry with explicit runtime settings.
+func NewManagerWithConfig(engine *sim.Engine, runtimeConfig sim.RuntimeConfig) *Manager {
 	if engine == nil {
 		engine = sim.NewEngine()
 	}
 
 	return &Manager{
-		tables: make(map[string]*managedTable),
-		now:    time.Now,
-		engine: engine,
+		tables:        make(map[string]*managedTable),
+		now:           time.Now,
+		engine:        engine,
+		runtimeConfig: runtimeConfig,
 	}
 }
 
@@ -59,7 +66,7 @@ func (m *Manager) Create(sessionID string) (*Table, error) {
 		SessionID: sessionID,
 		CreatedAt: m.now().UTC(),
 	}
-	runtime := sim.NewTableRuntime(table.ID, table.SessionID, table.CreatedAt)
+	runtime := sim.NewTableRuntimeWithConfig(table.ID, table.SessionID, table.CreatedAt, m.runtimeConfig)
 
 	m.mu.Lock()
 	m.tables[id] = &managedTable{
