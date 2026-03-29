@@ -118,6 +118,24 @@ The final implementation uses:
 
 This is more robust than depending on HTTP/2 multiplexing being present in every local environment.
 
+### Benefits and limits of the shared SSE multiplexing design
+
+Benefits:
+
+- avoids browser HTTP/1.1 per-origin connection caps
+- reduces browser-side connection, heartbeat, and reconnect overhead to one stream per session
+- keeps server-side table runtimes independent while simplifying response writes to one SSE handler
+- lets the frontend use one transport and route updates by `table_id`
+
+Trade-offs and limits:
+
+- the shared session stream is a single transport for all active tables in that browser session, so one disconnect temporarily affects all visible tables
+- total per-session throughput is bounded by one SSE response rather than scaling out to one browser connection per table
+- the system preserves event order within each table runtime, but it does not define a strict global ordering across different tables
+- adding a new table causes the browser to refresh the shared stream so the new subscription set is included
+- delivery is best-effort rather than durable; replayed history helps after reconnects, but this implementation does not guarantee lossless delivery semantics
+- this design is a good fit for a small local assignment, but a larger multi-instance system would need a shared event bus and stronger delivery guarantees
+
 ## 4. How This Solution Addresses the Evaluation Criteria
 
 ### Streaming architecture
