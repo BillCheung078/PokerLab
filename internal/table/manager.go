@@ -26,13 +26,24 @@ type Manager struct {
 	mu     sync.RWMutex
 	tables map[string]*managedTable
 	now    func() time.Time
+	engine *sim.Engine
 }
 
 // NewManager constructs an in-memory table registry.
 func NewManager() *Manager {
+	return NewManagerWithEngine(sim.NewEngine())
+}
+
+// NewManagerWithEngine constructs an in-memory table registry with an explicit simulator.
+func NewManagerWithEngine(engine *sim.Engine) *Manager {
+	if engine == nil {
+		engine = sim.NewEngine()
+	}
+
 	return &Manager{
 		tables: make(map[string]*managedTable),
 		now:    time.Now,
+		engine: engine,
 	}
 }
 
@@ -56,6 +67,8 @@ func (m *Manager) Create(sessionID string) (*Table, error) {
 		runtime: runtime,
 	}
 	m.mu.Unlock()
+
+	m.engine.Start(runtime)
 
 	return cloneTable(table), nil
 }

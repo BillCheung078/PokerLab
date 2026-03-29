@@ -24,11 +24,14 @@ type DashboardPageData struct {
 
 // TableViewData is the server-rendered table card view model.
 type TableViewData struct {
-	ID      string
-	Label   string
-	Status  string
-	Owner   string
-	ShortID string
+	ID         string
+	Label      string
+	Status     string
+	Owner      string
+	ShortID    string
+	GameNumber int
+	BlindLevel string
+	EventCount int
 }
 
 // FlashMessage is a small request-scoped UI message.
@@ -196,16 +199,26 @@ func (a *App) collectTables(sessionID string) []TableViewData {
 		}
 
 		status := "Runtime unavailable"
+		gameNumber := 0
+		blindLevel := ""
+		eventCount := 0
 		if runtime, ok := a.tables.Runtime(tableID); ok {
-			status = humanizeRuntimeStatus(runtime.Snapshot().State.Status)
+			snapshot := runtime.Snapshot()
+			status = humanizeRuntimeStatus(snapshot.State.Status)
+			gameNumber = snapshot.State.GameNumber
+			blindLevel = snapshot.State.BlindLevel
+			eventCount = len(snapshot.History)
 		}
 
 		tables = append(tables, TableViewData{
-			ID:      tbl.ID,
-			Label:   "Table " + strings.ToUpper(shortID(tbl.ID)),
-			Status:  status,
-			Owner:   "Current session",
-			ShortID: strings.ToUpper(shortID(tbl.ID)),
+			ID:         tbl.ID,
+			Label:      "Table " + strings.ToUpper(shortID(tbl.ID)),
+			Status:     status,
+			Owner:      "Current session",
+			ShortID:    strings.ToUpper(shortID(tbl.ID)),
+			GameNumber: gameNumber,
+			BlindLevel: blindLevel,
+			EventCount: eventCount,
 		})
 	}
 
@@ -227,8 +240,28 @@ func humanizeRuntimeStatus(status string) string {
 		return "Runtime initialized"
 	case "runtime_ready":
 		return "Runtime ready"
+	case "starting_hand":
+		return "Starting hand"
+	case "players_ready":
+		return "Players seated"
+	case "preflop":
+		return "Preflop cards dealt"
+	case "preflop_betting":
+		return "Preflop betting"
+	case "flop":
+		return "Flop dealt"
+	case "flop_betting":
+		return "Flop betting"
+	case "turn":
+		return "Turn dealt"
+	case "turn_betting":
+		return "Turn betting"
+	case "river":
+		return "River dealt"
 	case "runtime_stopped":
 		return "Runtime stopped"
+	case "hand_complete":
+		return "Hand complete"
 	default:
 		return "Runtime pending"
 	}

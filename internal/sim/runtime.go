@@ -69,6 +69,8 @@ type TableRuntime struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
+	startOnce   sync.Once
+	stopOnce    sync.Once
 	mu          sync.RWMutex
 	state       TableState
 	history     []PokerEvent
@@ -119,21 +121,23 @@ func (r *TableRuntime) Context() context.Context {
 
 // Cancel stops the runtime and releases subscriber channels.
 func (r *TableRuntime) Cancel() {
-	r.cancel()
+	r.stopOnce.Do(func() {
+		r.cancel()
 
-	r.mu.Lock()
-	r.state.Status = "runtime_stopped"
+		r.mu.Lock()
+		r.state.Status = "runtime_stopped"
 
-	channels := make([]chan PokerEvent, 0, len(r.subscribers))
-	for id, ch := range r.subscribers {
-		delete(r.subscribers, id)
-		channels = append(channels, ch)
-	}
-	r.mu.Unlock()
+		channels := make([]chan PokerEvent, 0, len(r.subscribers))
+		for id, ch := range r.subscribers {
+			delete(r.subscribers, id)
+			channels = append(channels, ch)
+		}
+		r.mu.Unlock()
 
-	for _, ch := range channels {
-		close(ch)
-	}
+		for _, ch := range channels {
+			close(ch)
+		}
+	})
 }
 
 // UpdateState mutates the runtime state under lock.
@@ -161,7 +165,9 @@ func (r *TableRuntime) AppendEvent(event PokerEvent) {
 
 	r.mu.Lock()
 	r.state.LastEventAt = event.At
-	r.state.Status = "runtime_ready"
+	if r.state.Status == "" || r.state.Status == "runtime_initialized" {
+		r.state.Status = "runtime_ready"
+	}
 	r.history = append(r.history, cloneEvent(event))
 	if len(r.history) > r.historyCap {
 		r.history = append([]PokerEvent(nil), r.history[len(r.history)-r.historyCap:]...)

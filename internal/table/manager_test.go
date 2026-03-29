@@ -1,9 +1,17 @@
 package table
 
-import "testing"
+import (
+	"testing"
+	"time"
+
+	"pokerlab/internal/sim"
+)
 
 func TestCreateGetAndDeleteTable(t *testing.T) {
-	manager := NewManager()
+	manager := NewManagerWithEngine(sim.NewEngineWithConfig(sim.EngineConfig{
+		IntraHandDelay: 5 * time.Millisecond,
+		HandPause:      5 * time.Millisecond,
+	}))
 
 	created, err := manager.Create("session-1")
 	if err != nil {
@@ -28,9 +36,7 @@ func TestCreateGetAndDeleteTable(t *testing.T) {
 	if !ok {
 		t.Fatal("expected Runtime() to find the created runtime")
 	}
-	if snapshot := runtime.Snapshot(); snapshot.State.Status != "runtime_initialized" {
-		t.Fatalf("runtime status = %q, want %q", snapshot.State.Status, "runtime_initialized")
-	}
+	waitForRuntime(t, time.Second, func() bool { return len(runtime.Snapshot().History) >= 2 })
 
 	deleted, ok := manager.Delete(created.ID)
 	if !ok {
@@ -49,4 +55,18 @@ func TestCreateGetAndDeleteTable(t *testing.T) {
 	if _, ok := manager.Runtime(created.ID); ok {
 		t.Fatal("expected runtime to be removed from registry")
 	}
+}
+
+func waitForRuntime(t *testing.T, timeout time.Duration, predicate func() bool) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if predicate() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	t.Fatal("timed out waiting for runtime condition")
 }

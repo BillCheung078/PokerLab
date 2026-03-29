@@ -10,6 +10,21 @@
 
   <p class="table-card-status">{{ .Status }}</p>
 
+  <dl class="table-metadata">
+    <div>
+      <dt>Hand</dt>
+      <dd>{{ if gt .GameNumber 0 }}#{{ .GameNumber }}{{ else }}Pending{{ end }}</dd>
+    </div>
+    <div>
+      <dt>Blinds</dt>
+      <dd>{{ if .BlindLevel }}{{ .BlindLevel }}{{ else }}Pending{{ end }}</dd>
+    </div>
+    <div>
+      <dt>Events</dt>
+      <dd>{{ .EventCount }}</dd>
+    </div>
+  </dl>
+
   <div class="table-card-actions">
     <button
       type="button"
