@@ -40,6 +40,12 @@ func TestDashboardRenders(t *testing.T) {
 	if !strings.Contains(body, `id="tables-grid"`) {
 		t.Fatalf("response missing tables grid container: %q", body)
 	}
+	if !strings.Contains(body, `/static/js/app.js`) {
+		t.Fatalf("response missing app bootstrap script: %q", body)
+	}
+	if !strings.Contains(body, "alpinejs") {
+		t.Fatalf("response missing Alpine.js script include: %q", body)
+	}
 	if !strings.Contains(body, "0 / 8") {
 		t.Fatalf("response missing initial table count: %q", body)
 	}
@@ -81,6 +87,12 @@ func TestCreateTableSetsCookieAndReturnsUpdatedDashboardContent(t *testing.T) {
 	}
 	if !strings.Contains(body, `class="table-card`) {
 		t.Fatalf("response missing table card markup: %q", body)
+	}
+	if !strings.Contains(body, `x-data="tableStream(`) {
+		t.Fatalf("response missing Alpine table stream component: %q", body)
+	}
+	if !strings.Contains(body, "Live Feed") {
+		t.Fatalf("response missing live feed section: %q", body)
 	}
 	if !strings.Contains(body, "1 / 8") {
 		t.Fatalf("response missing updated table count: %q", body)
@@ -189,21 +201,28 @@ func TestCreateTableRejectsNinthTable(t *testing.T) {
 	}
 }
 
-func TestTableStreamReplaysHistoryAndReceivesLiveEvents(t *testing.T) {
+func TestSessionStreamReplaysHistoryAndReceivesLiveEvents(t *testing.T) {
 	app, _, tables := newFastTestApp(t)
 
-	tableID, cookie := createTableWithHandler(t, app)
+	firstTableID, cookie := createTableWithHandler(t, app)
+	secondTableID := createTableWithCookie(t, app, cookie)
 
-	runtime, ok := tables.Runtime(tableID)
+	firstRuntime, ok := tables.Runtime(firstTableID)
 	if !ok {
-		t.Fatalf("expected runtime for table %q", tableID)
+		t.Fatalf("expected runtime for table %q", firstTableID)
 	}
-	waitFor(t, time.Second, func() bool { return len(runtime.Snapshot().History) >= 2 })
+	secondRuntime, ok := tables.Runtime(secondTableID)
+	if !ok {
+		t.Fatalf("expected runtime for table %q", secondTableID)
+	}
+	waitFor(t, time.Second, func() bool {
+		return len(firstRuntime.Snapshot().History) >= 2 && len(secondRuntime.Snapshot().History) >= 2
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	req := httptest.NewRequest(http.MethodGet, "/tables/"+tableID+"/stream", nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, "/stream", nil).WithContext(ctx)
 	req.AddCookie(cookie)
 	rec := newStreamingRecorder()
 
@@ -213,7 +232,7 @@ func TestTableStreamReplaysHistoryAndReceivesLiveEvents(t *testing.T) {
 		close(done)
 	}()
 
-	waitFor(t, time.Second, func() bool { return rec.MessageCount() >= 2 })
+	waitFor(t, time.Second, func() bool { return rec.MessageCount() >= 4 })
 
 	if rec.StatusCode() != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.StatusCode(), http.StatusOK)
@@ -223,14 +242,16 @@ func TestTableStreamReplaysHistoryAndReceivesLiveEvents(t *testing.T) {
 	}
 
 	messages := parseSSEMessages(rec.BodyString())
-	first := messages[0]
-
-	var replayEvent streamedPokerEvent
-	if err := json.Unmarshal([]byte(first.Data), &replayEvent); err != nil {
-		t.Fatalf("json.Unmarshal replay event error = %v", err)
+	seenTableIDs := make(map[string]bool)
+	for _, message := range messages {
+		var replayEvent streamedPokerEvent
+		if err := json.Unmarshal([]byte(message.Data), &replayEvent); err != nil {
+			t.Fatalf("json.Unmarshal replay event error = %v", err)
+		}
+		seenTableIDs[replayEvent.TableID] = true
 	}
-	if replayEvent.TableID != tableID {
-		t.Fatalf("replay event table_id = %q, want %q", replayEvent.TableID, tableID)
+	if !seenTableIDs[firstTableID] || !seenTableIDs[secondTableID] {
+		t.Fatalf("shared stream replay missing table IDs: %#v", seenTableIDs)
 	}
 
 	initialCount := rec.MessageCount()
@@ -240,14 +261,54 @@ func TestTableStreamReplaysHistoryAndReceivesLiveEvents(t *testing.T) {
 	waitForClosed(t, done, time.Second)
 }
 
-func TestTableStreamRejectsWrongSession(t *testing.T) {
+func TestSessionStreamOnlyIncludesCurrentSessionTables(t *testing.T) {
 	app, _, _ := newFastTestApp(t)
 
-	tableID, _ := createTableWithHandler(t, app)
-	_, otherCookie := createTableWithHandler(t, app)
+	firstTableID, _ := createTableWithHandler(t, app)
+	secondTableID, otherCookie := createTableWithHandler(t, app)
 
-	req := httptest.NewRequest(http.MethodGet, "/tables/"+tableID+"/stream", nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	req := httptest.NewRequest(http.MethodGet, "/stream", nil).WithContext(ctx)
 	req.AddCookie(otherCookie)
+	rec := newStreamingRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		app.Routes().ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	waitFor(t, time.Second, func() bool { return rec.MessageCount() >= 1 })
+	messages := parseSSEMessages(rec.BodyString())
+	seenSecondTable := false
+	for _, message := range messages {
+		var event streamedPokerEvent
+		if err := json.Unmarshal([]byte(message.Data), &event); err != nil {
+			t.Fatalf("json.Unmarshal stream event error = %v", err)
+		}
+		if event.TableID == firstTableID {
+			t.Fatalf("shared stream leaked first session table %q into second session stream", firstTableID)
+		}
+		if event.TableID == secondTableID {
+			seenSecondTable = true
+		}
+	}
+	if !seenSecondTable {
+		t.Fatalf("expected second session table %q in stream body: %q", secondTableID, rec.BodyString())
+	}
+
+	cancel()
+	waitForClosed(t, done, time.Second)
+}
+
+func TestSessionStreamRejectsMissingSessionWithoutSettingCookie(t *testing.T) {
+	app, _, _ := newFastTestApp(t)
+
+	createTableWithHandler(t, app)
+
+	req := httptest.NewRequest(http.MethodGet, "/stream", nil)
 	rec := httptest.NewRecorder()
 
 	app.Routes().ServeHTTP(rec, req)
@@ -255,20 +316,28 @@ func TestTableStreamRejectsWrongSession(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
 	}
+	if len(rec.Result().Cookies()) != 0 {
+		t.Fatalf("unexpected cookies set on rejected stream request: %#v", rec.Result().Cookies())
+	}
 }
 
-func TestTableStreamDisconnectCleansUpSubscriber(t *testing.T) {
+func TestSessionStreamDisconnectCleansUpSubscribers(t *testing.T) {
 	app, _, tables := newFastTestApp(t)
 
-	tableID, cookie := createTableWithHandler(t, app)
+	firstTableID, cookie := createTableWithHandler(t, app)
+	secondTableID := createTableWithCookie(t, app, cookie)
 
-	runtime, ok := tables.Runtime(tableID)
+	firstRuntime, ok := tables.Runtime(firstTableID)
 	if !ok {
-		t.Fatalf("expected runtime for table %q", tableID)
+		t.Fatalf("expected runtime for table %q", firstTableID)
+	}
+	secondRuntime, ok := tables.Runtime(secondTableID)
+	if !ok {
+		t.Fatalf("expected runtime for table %q", secondTableID)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	req := httptest.NewRequest(http.MethodGet, "/tables/"+tableID+"/stream", nil).WithContext(ctx)
+	req := httptest.NewRequest(http.MethodGet, "/stream", nil).WithContext(ctx)
 	req.AddCookie(cookie)
 	rec := newStreamingRecorder()
 
@@ -280,12 +349,16 @@ func TestTableStreamDisconnectCleansUpSubscriber(t *testing.T) {
 
 	waitFor(t, time.Second, func() bool { return rec.MessageCount() >= 1 })
 
-	waitFor(t, time.Second, func() bool { return runtime.Snapshot().SubscriberCount == 1 })
+	waitFor(t, time.Second, func() bool {
+		return firstRuntime.Snapshot().SubscriberCount == 1 && secondRuntime.Snapshot().SubscriberCount == 1
+	})
 
 	cancel()
 	waitForClosed(t, done, time.Second)
 
-	waitFor(t, time.Second, func() bool { return runtime.Snapshot().SubscriberCount == 0 })
+	waitFor(t, time.Second, func() bool {
+		return firstRuntime.Snapshot().SubscriberCount == 0 && secondRuntime.Snapshot().SubscriberCount == 0
+	})
 }
 
 func newTestApp(t *testing.T) *apphttp.App {
@@ -346,6 +419,22 @@ func createTableWithHandler(t *testing.T, app *apphttp.App) (string, *http.Cooki
 	}
 
 	return extractTableID(t, rec.Body.String()), cookies[0]
+}
+
+func createTableWithCookie(t *testing.T, app *apphttp.App, cookie *http.Cookie) string {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodPost, "/tables", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	app.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST /tables with cookie status = %d, want %d, body = %q", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+
+	return extractTableID(t, rec.Body.String())
 }
 
 type streamedPokerEvent struct {

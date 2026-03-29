@@ -8,7 +8,9 @@ import (
 	stdhttp "net/http"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"pokerlab/internal/session"
@@ -28,14 +30,15 @@ type DashboardPageData struct {
 
 // TableViewData is the server-rendered table card view model.
 type TableViewData struct {
-	ID         string
-	Label      string
-	Status     string
-	Owner      string
-	ShortID    string
-	GameNumber int
-	BlindLevel string
-	EventCount int
+	ID          string
+	Label       string
+	Status      string
+	Owner       string
+	ShortID     string
+	GameNumber  int
+	BlindLevel  string
+	EventCount  int
+	LastEventAt string
 }
 
 // FlashMessage is a small request-scoped UI message.
@@ -80,7 +83,7 @@ func (a *App) Routes() stdhttp.Handler {
 	mux.HandleFunc("GET /", a.handleDashboard)
 	mux.HandleFunc("POST /tables", a.handleCreateTable)
 	mux.HandleFunc("DELETE /tables/{id}", a.handleDeleteTable)
-	mux.HandleFunc("GET /tables/{id}/stream", a.handleTableStream)
+	mux.HandleFunc("GET /stream", a.handleSessionStream)
 	mux.Handle("GET /static/", stdhttp.StripPrefix("/static/", stdhttp.FileServer(stdhttp.Dir(a.staticDir))))
 
 	return mux
@@ -168,32 +171,10 @@ func (a *App) handleDeleteTable(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 	})
 }
 
-func (a *App) handleTableStream(w stdhttp.ResponseWriter, r *stdhttp.Request) {
-	sess, err := a.sessions.GetOrCreate(w, r)
-	if err != nil {
-		stdhttp.Error(w, stdhttp.StatusText(stdhttp.StatusInternalServerError), stdhttp.StatusInternalServerError)
-		return
-	}
-
-	tableID := strings.TrimSpace(r.PathValue("id"))
-	if tableID == "" {
-		stdhttp.NotFound(w, r)
-		return
-	}
-
-	tbl, ok := a.tables.Get(tableID)
+func (a *App) handleSessionStream(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+	sess, ok := a.sessions.Current(r)
 	if !ok {
-		stdhttp.NotFound(w, r)
-		return
-	}
-	if tbl.SessionID != sess.ID || !a.sessions.OwnsTable(sess.ID, tableID) {
 		stdhttp.Error(w, stdhttp.StatusText(stdhttp.StatusForbidden), stdhttp.StatusForbidden)
-		return
-	}
-
-	runtime, ok := a.tables.Runtime(tableID)
-	if !ok {
-		stdhttp.NotFound(w, r)
 		return
 	}
 
@@ -203,27 +184,95 @@ func (a *App) handleTableStream(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 		return
 	}
 
-	subscriberID, ch, err := runtime.Subscribe(0)
-	if err != nil {
-		stdhttp.Error(w, stdhttp.StatusText(stdhttp.StatusGone), stdhttp.StatusGone)
-		return
-	}
-	defer runtime.Unsubscribe(subscriberID)
-
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
-	snapshot := runtime.Snapshot()
-	replayed := make(map[string]struct{}, len(snapshot.History))
-	for _, event := range snapshot.History {
+	type runtimeSubscription struct {
+		id      string
+		runtime *sim.TableRuntime
+		ch      <-chan sim.PokerEvent
+	}
+
+	tableIDs := a.sessions.ListTableIDs(sess.ID)
+	subscriptions := make([]runtimeSubscription, 0, len(tableIDs))
+	replay := make([]sim.PokerEvent, 0, len(tableIDs)*sim.DefaultHistoryLimit)
+
+	for _, tableID := range tableIDs {
+		tbl, ok := a.tables.Get(tableID)
+		if !ok || tbl.SessionID != sess.ID {
+			continue
+		}
+
+		runtime, ok := a.tables.Runtime(tableID)
+		if !ok {
+			continue
+		}
+
+		subID, ch, err := runtime.Subscribe(0)
+		if err != nil {
+			continue
+		}
+
+		subscriptions = append(subscriptions, runtimeSubscription{
+			id:      subID,
+			runtime: runtime,
+			ch:      ch,
+		})
+		replay = append(replay, runtime.Snapshot().History...)
+	}
+
+	defer func() {
+		for _, subscription := range subscriptions {
+			subscription.runtime.Unsubscribe(subscription.id)
+		}
+	}()
+
+	sort.SliceStable(replay, func(i, j int) bool {
+		if replay[i].At.Equal(replay[j].At) {
+			return replay[i].ID < replay[j].ID
+		}
+		return replay[i].At.Before(replay[j].At)
+	})
+
+	replayed := make(map[string]struct{}, len(replay))
+	for _, event := range replay {
 		if err := writeSSEEvent(w, event); err != nil {
 			return
 		}
 		replayed[event.ID] = struct{}{}
 	}
 	flusher.Flush()
+
+	liveEvents := make(chan sim.PokerEvent, max(1, len(subscriptions))*sim.DefaultSubscriberBuffer)
+	var forwarders sync.WaitGroup
+	for _, subscription := range subscriptions {
+		forwarders.Add(1)
+		go func(subscription runtimeSubscription) {
+			defer forwarders.Done()
+
+			for {
+				select {
+				case <-r.Context().Done():
+					return
+				case <-subscription.runtime.Context().Done():
+					return
+				case event, ok := <-subscription.ch:
+					if !ok {
+						return
+					}
+					select {
+					case liveEvents <- event:
+					case <-r.Context().Done():
+						return
+					case <-subscription.runtime.Context().Done():
+						return
+					}
+				}
+			}
+		}(subscription)
+	}
 
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
@@ -232,14 +281,12 @@ func (a *App) handleTableStream(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 		select {
 		case <-r.Context().Done():
 			return
-		case <-runtime.Context().Done():
-			return
 		case <-heartbeat.C:
 			if _, err := fmt.Fprint(w, ": keep-alive\n\n"); err != nil {
 				return
 			}
 			flusher.Flush()
-		case event, ok := <-ch:
+		case event, ok := <-liveEvents:
 			if !ok {
 				return
 			}
@@ -306,23 +353,28 @@ func (a *App) collectTables(sessionID string) []TableViewData {
 		gameNumber := 0
 		blindLevel := ""
 		eventCount := 0
+		lastEventAt := ""
 		if runtime, ok := a.tables.Runtime(tableID); ok {
 			snapshot := runtime.Snapshot()
 			status = humanizeRuntimeStatus(snapshot.State.Status)
 			gameNumber = snapshot.State.GameNumber
 			blindLevel = snapshot.State.BlindLevel
-			eventCount = len(snapshot.History)
+			eventCount = snapshot.TotalEvents
+			if !snapshot.State.LastEventAt.IsZero() {
+				lastEventAt = snapshot.State.LastEventAt.Format(time.RFC3339Nano)
+			}
 		}
 
 		tables = append(tables, TableViewData{
-			ID:         tbl.ID,
-			Label:      "Table " + strings.ToUpper(shortID(tbl.ID)),
-			Status:     status,
-			Owner:      "Current session",
-			ShortID:    strings.ToUpper(shortID(tbl.ID)),
-			GameNumber: gameNumber,
-			BlindLevel: blindLevel,
-			EventCount: eventCount,
+			ID:          tbl.ID,
+			Label:       "Table " + strings.ToUpper(shortID(tbl.ID)),
+			Status:      status,
+			Owner:       "Current session",
+			ShortID:     strings.ToUpper(shortID(tbl.ID)),
+			GameNumber:  gameNumber,
+			BlindLevel:  blindLevel,
+			EventCount:  eventCount,
+			LastEventAt: lastEventAt,
 		})
 	}
 

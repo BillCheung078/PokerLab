@@ -28,7 +28,7 @@ This is fundamentally a problem of managing multiple independent server-side eve
 
 - Support dynamic creation of poker tables from the dashboard.
 - Enforce a maximum of 8 active tables per browser session.
-- Provide an independent event stream for each table.
+- Provide an independent event sequence for each table while delivering browser updates through one shared SSE connection per session.
 - Clean up all associated server-side resources when a table is removed.
 - Restore active tables after page refresh and reconnect their streams or show last known state.
 - Keep the implementation readable, maintainable, and well documented.
@@ -109,10 +109,10 @@ At a high level:
 
 - the browser renders a dashboard shell
 - HTMX handles structural interactions such as creating and removing table cards
-- Alpine.js manages per-table client state and the `EventSource` lifecycle
+- Alpine.js manages per-table client state and subscribes cards to one shared session-level `EventSource`
 - the server creates one runtime per active table
 - each runtime owns its simulation loop, current state, recent history, and subscriber registry
-- SSE delivers a one-way live stream of events from each table runtime to the corresponding browser component
+- SSE delivers a one-way multiplexed live stream for the current session, with each event carrying its `table_id`
 
 This architecture intentionally favors clarity and lifecycle control over unnecessary flexibility.
 
@@ -126,7 +126,7 @@ Browser
   ├─ HTMX POST /tables
   ├─ HTMX DELETE /tables/{id}
   ├─ Alpine component per table
-  └─ EventSource per table
+  └─ Shared EventSource per session
 
 Go Server
   ├─ HTTP router and handlers
@@ -138,7 +138,7 @@ Go Server
   │    ├─ current table state
   │    ├─ recent event history
   │    └─ subscriber registry
-  └─ SSE stream endpoint
+  └─ session-scoped SSE stream endpoint
 ```
 
 ---
@@ -155,6 +155,8 @@ Use **Server-Sent Events (SSE)**.
 - The system is read-heavy.
 - SSE provides browser-native streaming with automatic reconnection support.
 - SSE avoids the overhead of implementing a custom bidirectional messaging protocol.
+- A single multiplexed SSE connection avoids browser HTTP/1.1 per-origin connection limits that would otherwise be hit by one EventSource per table.
+- This keeps the design robust in local development without depending on HTTP/2 availability.
 
 #### Alternative 1: WebSockets
 
@@ -185,6 +187,40 @@ Use **Server-Sent Events (SSE)**.
 
 #### Final decision
 SSE is the best balance of correctness, simplicity, and reviewability for this assignment.
+
+### 8.1.1 Problem: Should the browser open one stream per table or multiplex through one connection?
+
+#### Chosen solution
+Use one shared SSE connection per browser session and multiplex events by `table_id`.
+
+#### Why this solves the problem well
+- Browser implementations commonly limit concurrent HTTP/1.1 connections per origin to a small number such as six.
+- The assignment requires support for up to eight tables, so one EventSource per table would make the browser-side limit part of the system design.
+- A shared connection preserves independent server-side runtimes while removing the client-side transport bottleneck.
+- It is more robust than assuming HTTP/2 will always be available in local development.
+
+#### Alternative 1: One EventSource per table
+
+**Advantages**
+- very direct mapping from browser component to backend route
+- simpler fan-out logic on the client
+
+**Disadvantages**
+- fragile under HTTP/1.1 browser connection limits
+- can starve normal HTMX requests once enough tables are open
+- makes the assignment's eight-table cap unreliable in practice
+
+#### Alternative 2: Depend on HTTP/2 multiplexing
+
+**Advantages**
+- would allow many concurrent streams over one transport connection
+
+**Disadvantages**
+- adds deployment and local-environment assumptions
+- weakens the design narrative because correctness depends on transport negotiation rather than application structure
+
+#### Final decision
+Use a single browser SSE connection and multiplex events in the application layer. This is the more robust design and easier to defend in review.
 
 ---
 
@@ -332,7 +368,7 @@ Hybrid continuity offers the best balance of UX and architectural clarity, but p
 Use a **hybrid HTMX + Alpine.js model**:
 
 - HTMX for table creation/removal and server-rendered partial insertion
-- Alpine.js for per-table stream lifecycle, event list state, and connection status
+- Alpine.js for table-local event state and connection status on top of one shared session stream manager
 
 #### Why this solves the problem well
 - HTMX excels at request/response DOM updates
@@ -492,7 +528,7 @@ Suggested routes:
 | GET | `/` | render dashboard and restored tables |
 | POST | `/tables` | create a new table |
 | DELETE | `/tables/{id}` | remove a table |
-| GET | `/tables/{id}/stream` | open SSE stream for a table |
+| GET | `/stream` | open the shared SSE stream for the current session |
 | GET | `/session/tables` | optional restore endpoint |
 
 ### 10.2 SessionManager
@@ -536,7 +572,7 @@ Responsibilities:
 ### 11.2 Alpine.js responsibilities
 
 - initialize table-local state
-- open and manage `EventSource`
+- subscribe table cards to the shared session `EventSource`
 - append incoming events to UI state
 - show connection state such as `connecting`, `live`, and `disconnected`
 - optionally cache last-known-state in `sessionStorage`
@@ -558,16 +594,17 @@ This division keeps the browser code lightweight but purposeful. HTMX handles se
 5. Simulation loop starts.
 6. Server returns rendered table card HTML.
 7. Browser inserts the table card.
-8. Alpine opens the SSE stream.
+8. Alpine registers the new table card with the shared SSE manager, which refreshes the session stream if needed.
 
 ### 12.2 Stream flow
 
-1. Browser opens `GET /tables/{id}/stream`.
-2. Server validates table ownership.
-3. Subscriber channel is registered with the table runtime.
-4. Optional recent history replay is sent.
-5. New events stream in real time.
-6. Client disconnect unregisters the subscriber.
+1. Browser opens `GET /stream`.
+2. Server validates the current session.
+3. Subscriber channels are registered with each active table runtime for that session.
+4. Optional recent history replay is sent for all active tables.
+5. New events stream in real time over one shared connection.
+6. The browser dispatches each event to the correct table card using `table_id`.
+7. Client disconnect unregisters the session stream subscribers.
 
 ### 12.3 Remove table flow
 
@@ -586,7 +623,7 @@ This division keeps the browser code lightweight but purposeful. HTMX handles se
 2. Session cookie is preserved.
 3. Server restores active tables for the session.
 4. Table cards are re-rendered.
-5. Alpine reconnects EventSource per table.
+5. Alpine reconnects the shared session EventSource.
 6. Recent history or last-known-state fills the gap.
 
 ---
@@ -651,7 +688,7 @@ Each table runtime gets a dedicated simulation goroutine.
 
 ### 15.2 Per-stream connection concurrency
 
-Each active stream request uses its own request lifecycle and subscriber registration.
+Each session stream request uses its own request lifecycle and fan-in registration across that session's active runtimes.
 
 ### 15.3 Shared state protection
 
@@ -735,7 +772,7 @@ Using `httptest`:
 - `GET /`
 - `POST /tables`
 - `DELETE /tables/{id}`
-- validation around `GET /tables/{id}/stream`
+- validation around `GET /stream`
 
 ### 17.3 Optional integration tests
 
@@ -780,7 +817,7 @@ It separates transport concerns from domain/runtime concerns and keeps simulatio
 | Session continuity | Server-side session + optional client fallback | Client-only or DB-backed session state | Less durable than DB-backed persistence, but much simpler and sufficient for local execution |
 | Frontend state split | HTMX + Alpine.js hybrid | HTMX-only or SPA framework | Slightly more moving parts than HTMX-only, but much better ergonomics for stream state |
 | State storage | In-memory | Persistent database | No restart durability, but much lower complexity |
-| Stream topology | One stream per table | Multiplexed stream | More connections, but clearer lifecycle and simpler reasoning |
+| Stream topology | One shared session stream with application-level multiplexing | One stream per table, transport-level HTTP/2 multiplexing | Slightly more client fan-out logic, but far more robust under browser HTTP/1.1 connection limits |
 
 ---
 
@@ -815,7 +852,7 @@ The recommended solution is:
 - a server-owned `TableRuntime` per table
 - a `SessionManager` to restore active tables after refresh
 - HTMX for structural UI interactions
-- Alpine.js for table-local streaming state
+- Alpine.js for table-local streaming state on top of one shared session SSE connection
 - in-memory state with bounded history and explicit cleanup paths
 
 This design is the strongest fit for the assignment because it solves the required problem directly, keeps complexity proportional to scope, and provides a clear narrative around concurrency, resource management, and maintainability.

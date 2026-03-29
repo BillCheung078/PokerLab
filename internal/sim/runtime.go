@@ -56,6 +56,7 @@ type RuntimeSnapshot struct {
 	CreatedAt       time.Time
 	State           TableState
 	History         []PokerEvent
+	TotalEvents     int
 	SubscriberCount int
 	Running         bool
 }
@@ -74,6 +75,7 @@ type TableRuntime struct {
 	mu          sync.RWMutex
 	state       TableState
 	history     []PokerEvent
+	totalEvents int
 	historyCap  int
 	subscribers map[string]chan PokerEvent
 }
@@ -109,6 +111,7 @@ func (r *TableRuntime) Snapshot() RuntimeSnapshot {
 		CreatedAt:       r.CreatedAt,
 		State:           cloneState(r.state),
 		History:         cloneHistory(r.history),
+		TotalEvents:     r.totalEvents,
 		SubscriberCount: len(r.subscribers),
 		Running:         r.ctx.Err() == nil,
 	}
@@ -161,6 +164,7 @@ func (r *TableRuntime) AppendEvent(event PokerEvent) {
 	if r.state.Status == "" || r.state.Status == "runtime_initialized" {
 		r.state.Status = "runtime_ready"
 	}
+	r.totalEvents++
 	r.history = append(r.history, cloneEvent(event))
 	if len(r.history) > r.historyCap {
 		r.history = append([]PokerEvent(nil), r.history[len(r.history)-r.historyCap:]...)

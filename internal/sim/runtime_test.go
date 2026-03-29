@@ -54,6 +54,9 @@ func TestAppendEventUpdatesHistoryAndSubscriber(t *testing.T) {
 	if len(snapshot.History) != 1 {
 		t.Fatalf("history length = %d, want 1", len(snapshot.History))
 	}
+	if snapshot.TotalEvents != 1 {
+		t.Fatalf("total events = %d, want 1", snapshot.TotalEvents)
+	}
 	if snapshot.State.Status != "runtime_ready" {
 		t.Fatalf("state status = %q, want %q", snapshot.State.Status, "runtime_ready")
 	}

@@ -89,6 +89,20 @@ func (m *Manager) GetOrCreate(w http.ResponseWriter, r *http.Request) (*Session,
 	return cloneSession(sess), nil
 }
 
+// Current returns the existing cookie-backed session without creating a new one.
+func (m *Manager) Current(r *http.Request) (*Session, bool) {
+	if r == nil {
+		return nil, false
+	}
+
+	cookie, err := r.Cookie(m.cookieName)
+	if err != nil || cookie.Value == "" {
+		return nil, false
+	}
+
+	return m.get(cookie.Value)
+}
+
 // AddTable appends a table to the ordered session list if capacity allows.
 func (m *Manager) AddTable(sessionID, tableID string) error {
 	m.mu.Lock()

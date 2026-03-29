@@ -1,5 +1,16 @@
 {{ define "table-card" }}
-<article class="table-card card" data-table-id="{{ .ID }}">
+<article
+  class="table-card card"
+  data-table-id="{{ .ID }}"
+  x-data="tableStream({
+    tableId: '{{ .ID }}',
+    initialStatus: '{{ .Status }}',
+    initialGameNumber: {{ .GameNumber }},
+    initialBlindLevel: '{{ .BlindLevel }}',
+    initialEventCount: {{ .EventCount }},
+    initialLastEventAt: '{{ .LastEventAt }}'
+  })"
+>
   <div class="table-card-header">
     <div>
       <p class="table-card-kicker">{{ .Owner }}</p>
@@ -8,22 +19,51 @@
     <span class="table-badge">{{ .ShortID }}</span>
   </div>
 
-  <p class="table-card-status">{{ .Status }}</p>
+  <div class="table-card-status-row">
+    <p class="table-card-status" x-text="status">{{ .Status }}</p>
+    <span class="stream-pill" :class="connectionClass()" x-text="connectionLabel()">
+      Connecting
+    </span>
+  </div>
+  <p class="table-stream-note" x-text="connectionDetail"></p>
 
   <dl class="table-metadata">
     <div>
       <dt>Hand</dt>
-      <dd>{{ if gt .GameNumber 0 }}#{{ .GameNumber }}{{ else }}Pending{{ end }}</dd>
+      <dd x-text="gameLabel()">{{ if gt .GameNumber 0 }}#{{ .GameNumber }}{{ else }}Pending{{ end }}</dd>
     </div>
     <div>
       <dt>Blinds</dt>
-      <dd>{{ if .BlindLevel }}{{ .BlindLevel }}{{ else }}Pending{{ end }}</dd>
+      <dd x-text="blindLabel()">{{ if .BlindLevel }}{{ .BlindLevel }}{{ else }}Pending{{ end }}</dd>
     </div>
     <div>
       <dt>Events</dt>
-      <dd>{{ .EventCount }}</dd>
+      <dd x-text="eventCount">{{ .EventCount }}</dd>
     </div>
   </dl>
+
+  <section class="table-feed" aria-live="polite">
+    <div class="table-feed-header">
+      <h4>Live Feed</h4>
+      <span class="table-feed-hint" x-text="feedHint()">Waiting for stream</span>
+    </div>
+
+    <template x-if="events.length === 0">
+      <p class="table-feed-empty" x-cloak>Waiting for streamed table events.</p>
+    </template>
+
+    <ol class="table-feed-list" x-show="events.length > 0" x-cloak>
+      <template x-for="event in events" :key="event.id">
+        <li class="table-feed-item">
+          <div class="table-feed-copy">
+            <p class="table-feed-title" x-text="event.title"></p>
+            <p class="table-feed-detail" x-text="event.detail"></p>
+          </div>
+          <time class="table-feed-time" x-text="event.timeLabel"></time>
+        </li>
+      </template>
+    </ol>
+  </section>
 
   <div class="table-card-actions">
     <button
