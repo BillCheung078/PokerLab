@@ -157,6 +157,7 @@ Use **Server-Sent Events (SSE)**.
 - SSE avoids the overhead of implementing a custom bidirectional messaging protocol.
 - A single multiplexed SSE connection avoids browser HTTP/1.1 per-origin connection limits that would otherwise be hit by one EventSource per table.
 - This keeps the design robust in local development without depending on HTTP/2 availability.
+- The session stream handler can clear its per-request write deadline so normal server write timeouts still protect ordinary handlers without terminating long-lived SSE responses.
 
 #### Alternative 1: WebSockets
 

@@ -207,6 +207,13 @@ func (a *App) handleSessionStream(w stdhttp.ResponseWriter, r *stdhttp.Request) 
 		return
 	}
 
+	// SSE responses are intentionally long-lived, so they must not inherit the
+	// server-wide write deadline used for ordinary request/response handlers.
+	controller := stdhttp.NewResponseController(w)
+	if err := controller.SetWriteDeadline(time.Time{}); err != nil && !errors.Is(err, stdhttp.ErrNotSupported) {
+		log.Printf("disable stream write deadline: %v", err)
+	}
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")

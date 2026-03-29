@@ -159,6 +159,7 @@ Runtime behavior is configurable through environment variables. Defaults are def
   - Example: `5s`
 - `HTTP_WRITE_TIMEOUT`
   - Example: `30s`
+  - Applies to ordinary request/response handlers; the SSE `/stream` handler clears the per-request write deadline so long-lived streams are not cut off by the server-wide timeout
 - `HTTP_IDLE_TIMEOUT`
   - Example: `60s`
 
@@ -205,7 +206,7 @@ Runtime behavior is configurable through environment variables. Defaults are def
 ### Example
 
 ```bash
-SESSION_MAX_TABLES=12 \
+SESSION_MAX_TABLES=8 \
 SIM_HISTORY_LIMIT=128 \
 STREAM_REPLAY_LIMIT=50 \
 SIM_INTRA_HAND_DELAY=800ms \

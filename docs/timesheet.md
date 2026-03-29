@@ -59,3 +59,7 @@ It serves as a reference for project management, progress monitoring, and effort
 ### 2026-03-29
 - **Time Spent:** 1.7 hours
 - **Activity:** phase 8 - Finalized the project documentation and submission packaging. Added a structured README with a table of contents, setup and run instructions, configuration reference, architecture summary, evaluation-criteria mapping, trade-offs, scalability notes, and links to supporting design documents. Updated the roadmap wording to better match the final implementation, especially around the shared session-level SSE architecture. Added a final architecture flow diagram asset to the repository and embedded it directly in the README so the end-to-end browser and backend interaction model is easy to review.
+
+### 2026-03-29
+- **Time Spent:** 0.2 hours
+- **Activity:** defect: fix SSE stream timeout and README limits.

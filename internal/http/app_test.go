@@ -279,6 +279,12 @@ func TestSessionStreamReplaysHistoryAndReceivesLiveEvents(t *testing.T) {
 	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "text/event-stream") {
 		t.Fatalf("Content-Type = %q, want text/event-stream", got)
 	}
+	if rec.WriteDeadlineCallCount() == 0 {
+		t.Fatal("expected stream handler to clear the per-request write deadline")
+	}
+	if deadline := rec.LastWriteDeadline(); !deadline.IsZero() {
+		t.Fatalf("write deadline = %v, want zero time", deadline)
+	}
 
 	messages := parseSSEMessages(rec.BodyString())
 	seenTableIDs := make(map[string]bool)
@@ -555,10 +561,12 @@ func waitForClosed(t *testing.T, done <-chan struct{}, timeout time.Duration) {
 }
 
 type streamingRecorder struct {
-	header http.Header
-	body   bytes.Buffer
-	code   int
-	mu     sync.Mutex
+	header                 http.Header
+	body                   bytes.Buffer
+	code                   int
+	writeDeadline          time.Time
+	writeDeadlineCallCount int
+	mu                     sync.Mutex
 }
 
 func newStreamingRecorder() *streamingRecorder {
@@ -591,6 +599,15 @@ func (r *streamingRecorder) WriteHeader(statusCode int) {
 
 func (r *streamingRecorder) Flush() {}
 
+func (r *streamingRecorder) SetWriteDeadline(deadline time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.writeDeadline = deadline
+	r.writeDeadlineCallCount++
+	return nil
+}
+
 func (r *streamingRecorder) StatusCode() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -611,6 +628,20 @@ func (r *streamingRecorder) BodyString() string {
 
 func (r *streamingRecorder) MessageCount() int {
 	return len(parseSSEMessages(r.BodyString()))
+}
+
+func (r *streamingRecorder) LastWriteDeadline() time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.writeDeadline
+}
+
+func (r *streamingRecorder) WriteDeadlineCallCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.writeDeadlineCallCount
 }
 
 type sseMessage struct {
