@@ -195,10 +195,15 @@ func (a *App) collectTables(sessionID string) []TableViewData {
 			continue
 		}
 
+		status := "Runtime unavailable"
+		if runtime, ok := a.tables.Runtime(tableID); ok {
+			status = humanizeRuntimeStatus(runtime.Snapshot().State.Status)
+		}
+
 		tables = append(tables, TableViewData{
 			ID:      tbl.ID,
 			Label:   "Table " + strings.ToUpper(shortID(tbl.ID)),
-			Status:  "Waiting for live simulation",
+			Status:  status,
 			Owner:   "Current session",
 			ShortID: strings.ToUpper(shortID(tbl.ID)),
 		})
@@ -214,6 +219,19 @@ func shortID(value string) string {
 	}
 
 	return value[:6]
+}
+
+func humanizeRuntimeStatus(status string) string {
+	switch status {
+	case "runtime_initialized":
+		return "Runtime initialized"
+	case "runtime_ready":
+		return "Runtime ready"
+	case "runtime_stopped":
+		return "Runtime stopped"
+	default:
+		return "Runtime pending"
+	}
 }
 
 func projectRoot() string {

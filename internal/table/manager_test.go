@@ -24,6 +24,14 @@ func TestCreateGetAndDeleteTable(t *testing.T) {
 		t.Fatalf("Get().ID = %q, want %q", got.ID, created.ID)
 	}
 
+	runtime, ok := manager.Runtime(created.ID)
+	if !ok {
+		t.Fatal("expected Runtime() to find the created runtime")
+	}
+	if snapshot := runtime.Snapshot(); snapshot.State.Status != "runtime_initialized" {
+		t.Fatalf("runtime status = %q, want %q", snapshot.State.Status, "runtime_initialized")
+	}
+
 	deleted, ok := manager.Delete(created.ID)
 	if !ok {
 		t.Fatal("expected Delete() to succeed")
@@ -31,8 +39,14 @@ func TestCreateGetAndDeleteTable(t *testing.T) {
 	if deleted.ID != created.ID {
 		t.Fatalf("Delete().ID = %q, want %q", deleted.ID, created.ID)
 	}
+	if snapshot := runtime.Snapshot(); snapshot.Running {
+		t.Fatal("expected runtime to be cancelled after Delete()")
+	}
 
 	if _, ok := manager.Get(created.ID); ok {
 		t.Fatal("expected table to be removed from registry")
+	}
+	if _, ok := manager.Runtime(created.ID); ok {
+		t.Fatal("expected runtime to be removed from registry")
 	}
 }
