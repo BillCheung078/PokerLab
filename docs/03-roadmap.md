@@ -143,6 +143,12 @@ Connect the browser UI to the streaming backend using HTMX and Alpine.js appropr
 ### Goal
 Support refresh and reconnection behavior in a clear and predictable way.
 
+### Implementation note
+In the final implementation, most of this phase is satisfied by the combined work from Phase 2, Phase 4, and Phase 5:
+- Phase 2 restores active tables from the server-side session on page load.
+- Phase 4 replays recent event history through the SSE stream.
+- Phase 5 reconnects the browser to the shared session stream after reload.
+
 ### Tasks
 - restore active tables from the server-side session
 - reconnect table streams after page reload

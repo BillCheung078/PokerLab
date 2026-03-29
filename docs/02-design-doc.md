@@ -856,3 +856,12 @@ The recommended solution is:
 - in-memory state with bounded history and explicit cleanup paths
 
 This design is the strongest fit for the assignment because it solves the required problem directly, keeps complexity proportional to scope, and provides a clear narrative around concurrency, resource management, and maintainability.
+
+### Reconnection and continuity note
+
+In the implemented version, refresh and continuity behavior are not handled by a separate subsystem. They emerge from the combination of:
+- server-side session restoration for active tables
+- bounded recent-history replay on the shared SSE stream
+- frontend reconnection to the shared session stream after reload
+
+This keeps Phase 6 small and avoids introducing extra client persistence before it is actually needed.

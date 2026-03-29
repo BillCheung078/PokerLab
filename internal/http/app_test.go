@@ -361,6 +361,52 @@ func TestSessionStreamDisconnectCleansUpSubscribers(t *testing.T) {
 	})
 }
 
+func TestRefreshRestoresTablesAndReconnectsSharedStream(t *testing.T) {
+	app, _, tables := newFastTestApp(t)
+
+	tableID, cookie := createTableWithHandler(t, app)
+
+	runtime, ok := tables.Runtime(tableID)
+	if !ok {
+		t.Fatalf("expected runtime for table %q", tableID)
+	}
+	waitFor(t, time.Second, func() bool { return len(runtime.Snapshot().History) >= 2 })
+
+	getReq := httptest.NewRequest(http.MethodGet, "/", nil)
+	getReq.AddCookie(cookie)
+	getRec := httptest.NewRecorder()
+
+	app.Routes().ServeHTTP(getRec, getReq)
+
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET / status = %d, want %d", getRec.Code, http.StatusOK)
+	}
+	if !strings.Contains(getRec.Body.String(), `data-table-id="`+tableID+`"`) {
+		t.Fatalf("restored dashboard missing table %q: %q", tableID, getRec.Body.String())
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	req := httptest.NewRequest(http.MethodGet, "/stream", nil).WithContext(ctx)
+	req.AddCookie(cookie)
+	rec := newStreamingRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		app.Routes().ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	waitFor(t, time.Second, func() bool { return rec.MessageCount() >= 2 })
+
+	initialCount := rec.MessageCount()
+	waitFor(t, time.Second, func() bool { return rec.MessageCount() > initialCount })
+
+	cancel()
+	waitForClosed(t, done, time.Second)
+}
+
 func newTestApp(t *testing.T) *apphttp.App {
 	t.Helper()
 
