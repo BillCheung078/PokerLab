@@ -161,6 +161,45 @@ func TestDeleteTableRemovesOwnedTable(t *testing.T) {
 	}
 }
 
+func TestDeleteTableReturnsNotFoundForMissingTable(t *testing.T) {
+	app := newTestApp(t)
+
+	_, cookie := createTableWithHandler(t, app)
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/tables/tbl_missing", nil)
+	deleteReq.AddCookie(cookie)
+	deleteRec := httptest.NewRecorder()
+
+	app.Routes().ServeHTTP(deleteRec, deleteReq)
+
+	if deleteRec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", deleteRec.Code, http.StatusNotFound)
+	}
+	if !strings.Contains(deleteRec.Body.String(), "That table no longer exists.") {
+		t.Fatalf("response missing not-found flash: %q", deleteRec.Body.String())
+	}
+}
+
+func TestDeleteTableRejectsDifferentSession(t *testing.T) {
+	app := newTestApp(t)
+
+	tableID, _ := createTableWithHandler(t, app)
+	_, otherCookie := createTableWithHandler(t, app)
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/tables/"+tableID, nil)
+	deleteReq.AddCookie(otherCookie)
+	deleteRec := httptest.NewRecorder()
+
+	app.Routes().ServeHTTP(deleteRec, deleteReq)
+
+	if deleteRec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", deleteRec.Code, http.StatusForbidden)
+	}
+	if !strings.Contains(deleteRec.Body.String(), "You can only remove tables owned by the current dashboard session.") {
+		t.Fatalf("response missing forbidden flash: %q", deleteRec.Body.String())
+	}
+}
+
 func TestCreateTableRejectsNinthTable(t *testing.T) {
 	app := newTestApp(t)
 

@@ -97,3 +97,58 @@ func TestCancelStopsRuntimeAndRejectsSubscribers(t *testing.T) {
 	case <-time.After(20 * time.Millisecond):
 	}
 }
+
+func TestAppendEventBoundsHistoryButPreservesTotalEvents(t *testing.T) {
+	runtime := NewTableRuntime("tbl_123", "sess_abc", time.Now())
+
+	for i := 0; i < DefaultHistoryLimit+5; i++ {
+		runtime.AppendEvent(PokerEvent{
+			Type: "bet_action",
+			Payload: map[string]any{
+				"seq": i,
+			},
+		})
+	}
+
+	snapshot := runtime.Snapshot()
+	if got := len(snapshot.History); got != DefaultHistoryLimit {
+		t.Fatalf("history length = %d, want %d", got, DefaultHistoryLimit)
+	}
+	if got := snapshot.TotalEvents; got != DefaultHistoryLimit+5 {
+		t.Fatalf("total events = %d, want %d", got, DefaultHistoryLimit+5)
+	}
+}
+
+func TestAppendEventDoesNotBlockOnSlowSubscriber(t *testing.T) {
+	runtime := NewTableRuntime("tbl_123", "sess_abc", time.Now())
+
+	subID, _, err := runtime.Subscribe(1)
+	if err != nil {
+		t.Fatalf("Subscribe() error = %v", err)
+	}
+	defer runtime.Unsubscribe(subID)
+
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 32; i++ {
+			runtime.AppendEvent(PokerEvent{
+				Type: "bet_action",
+				Payload: map[string]any{
+					"seq": i,
+				},
+			})
+		}
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("AppendEvent() blocked on slow subscriber")
+	}
+
+	snapshot := runtime.Snapshot()
+	if got := snapshot.TotalEvents; got != 32 {
+		t.Fatalf("total events = %d, want %d", got, 32)
+	}
+}
