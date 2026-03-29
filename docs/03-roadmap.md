@@ -113,7 +113,7 @@ Deliver live table events from the backend to the browser.
 
 ### Deliverables
 - frontend receives live events in near real time
-- each table has its own stream
+- the browser receives one shared session stream carrying all active table events
 - stream cleanup works correctly on disconnect
 
 ---
@@ -125,7 +125,7 @@ Connect the browser UI to the streaming backend using HTMX and Alpine.js appropr
 
 ### Tasks
 - build an Alpine component for each table
-- initialize `EventSource` per table
+- initialize one shared browser `EventSource` for the current session
 - append incoming events to the table feed
 - display connection state
 - wire remove actions to the backend
@@ -133,7 +133,7 @@ Connect the browser UI to the streaming backend using HTMX and Alpine.js appropr
 
 ### Deliverables
 - event feeds update live in the browser
-- each table behaves as an isolated component
+- each table behaves as an isolated component while sharing one browser stream
 - add/remove flow works end to end
 
 ---
