@@ -31,6 +31,12 @@ Then open [http://localhost:8080](http://localhost:8080).
 
 By default the server listens on `:8080`. If `PORT` is set in the environment, that value takes precedence. If `HTTP_ADDR` is set, the server uses that full listen address unless `PORT` is also provided.
 
+### Frontend dependency note
+
+The current submission loads HTMX and Alpine.js from public CDNs in the base template. That keeps the repository small, but it also means the browser needs outbound internet access the first time the page loads those assets.
+
+If the reviewer runs the app in a restricted or offline environment, those client-side libraries should be vendored into `web/static` and referenced locally instead.
+
 ### Run tests
 
 ```bash
