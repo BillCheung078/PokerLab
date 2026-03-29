@@ -3,35 +3,13 @@
 {{ define "content" }}
 <main class="dashboard">
   <section class="hero">
-    <p class="eyebrow">Phase 1</p>
+    <p class="eyebrow">Phase 2</p>
     <h1>{{ .Title }}</h1>
     <p class="lede">
-      A runnable baseline for the technical assignment. Table lifecycle and live
-      streaming arrive in later phases.
+      Session-owned tables can now be added, removed, and restored after a page
+      refresh. Streaming arrives in the next phase.
     </p>
   </section>
-
-  <section class="controls card">
-    <div>
-      <h2>Dashboard Controls</h2>
-      <p>The table shell is in place. Interactive creation starts in Phase 2.</p>
-    </div>
-    <button type="button" class="primary-button" disabled aria-disabled="true">
-      Add Table
-    </button>
-  </section>
-
-  <section class="tables-section">
-    <div class="section-heading">
-      <h2>Active Tables</h2>
-      <span class="table-count">0 / 8</span>
-    </div>
-    <div id="tables-grid" class="tables-grid" aria-live="polite">
-      <div class="empty-state card">
-        <h3>No tables yet</h3>
-        <p>The dashboard skeleton is ready for HTMX table insertion in the next phase.</p>
-      </div>
-    </div>
-  </section>
+  {{ template "dashboard-content" . }}
 </main>
 {{ end }}

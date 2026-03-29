@@ -1,0 +1,25 @@
+{{ define "table-card" }}
+<article class="table-card card" data-table-id="{{ .ID }}">
+  <div class="table-card-header">
+    <div>
+      <p class="table-card-kicker">{{ .Owner }}</p>
+      <h3>{{ .Label }}</h3>
+    </div>
+    <span class="table-badge">{{ .ShortID }}</span>
+  </div>
+
+  <p class="table-card-status">{{ .Status }}</p>
+
+  <div class="table-card-actions">
+    <button
+      type="button"
+      class="ghost-button"
+      hx-delete="/tables/{{ .ID }}"
+      hx-target="#dashboard-content"
+      hx-swap="outerHTML"
+    >
+      Remove
+    </button>
+  </div>
+</article>
+{{ end }}

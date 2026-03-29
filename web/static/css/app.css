@@ -43,6 +43,11 @@ body {
   gap: 24px;
 }
 
+.dashboard-content {
+  display: grid;
+  gap: 24px;
+}
+
 .hero {
   padding: 16px 4px 0;
 }
@@ -107,6 +112,42 @@ body {
   opacity: 0.7;
 }
 
+.primary-button:not(:disabled),
+.ghost-button {
+  cursor: pointer;
+  opacity: 1;
+}
+
+.ghost-button {
+  border: 1px solid rgba(15, 90, 67, 0.18);
+  border-radius: 999px;
+  padding: 0.7rem 1rem;
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--accent);
+  font: inherit;
+  font-weight: 700;
+}
+
+.flash {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.95rem 1.1rem;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+
+.flash-success {
+  background: rgba(226, 241, 234, 0.95);
+  color: #0f5a43;
+}
+
+.flash-error {
+  background: rgba(255, 237, 232, 0.95);
+  color: #8b2b1f;
+}
+
 .tables-section {
   display: grid;
   gap: 16px;
@@ -133,6 +174,55 @@ body {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 18px;
+}
+
+.table-card {
+  min-height: 220px;
+  padding: 22px;
+  display: grid;
+  gap: 18px;
+  align-content: start;
+}
+
+.table-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.table-card-kicker {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.table-card-header h3 {
+  margin: 0;
+  font-size: 1.35rem;
+}
+
+.table-badge {
+  align-self: start;
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  background: rgba(15, 90, 67, 0.08);
+  color: var(--accent);
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.table-card-status {
+  margin: 0;
+  color: var(--muted);
+}
+
+.table-card-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .empty-state {

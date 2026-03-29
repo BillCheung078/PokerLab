@@ -1,0 +1,49 @@
+{{ define "dashboard-content" }}
+<div id="dashboard-content" class="dashboard-content">
+  {{ if .Flash }}
+    <div class="flash flash-{{ .Flash.Kind }}" role="status">
+      <strong>{{ if eq .Flash.Kind "error" }}Error{{ else }}Update{{ end }}</strong>
+      <span>{{ .Flash.Message }}</span>
+    </div>
+  {{ end }}
+
+  <section class="controls card">
+    <div>
+      <h2>Dashboard Controls</h2>
+      <p>
+        Tables are owned by the current browser session and are restored on
+        refresh until they are removed.
+      </p>
+    </div>
+    <button
+      type="button"
+      class="primary-button"
+      hx-post="/tables"
+      hx-target="#dashboard-content"
+      hx-swap="outerHTML"
+      {{ if ge .TableCount .MaxTables }}disabled aria-disabled="true"{{ end }}
+    >
+      Add Table
+    </button>
+  </section>
+
+  <section class="tables-section">
+    <div class="section-heading">
+      <h2>Active Tables</h2>
+      <span class="table-count">{{ .TableCount }} / {{ .MaxTables }}</span>
+    </div>
+    <div id="tables-grid" class="tables-grid" aria-live="polite">
+      {{ if .Tables }}
+        {{ range .Tables }}
+          {{ template "table-card" . }}
+        {{ end }}
+      {{ else }}
+        <div class="empty-state card">
+          <h3>No tables yet</h3>
+          <p>Create a table to verify session ownership, max-table enforcement, and server-rendered lifecycle updates.</p>
+        </div>
+      {{ end }}
+    </div>
+  </section>
+</div>
+{{ end }}
