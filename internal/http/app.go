@@ -1,14 +1,18 @@
 package http
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	stdhttp "net/http"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"pokerlab/internal/session"
+	"pokerlab/internal/sim"
 	"pokerlab/internal/table"
 	"pokerlab/internal/templates"
 )
@@ -50,11 +54,23 @@ type App struct {
 
 // NewApp constructs the Phase 1 application shell.
 func NewApp(renderer *templates.Renderer) *App {
+	return NewAppWithServices(renderer, session.NewManager(), table.NewManager())
+}
+
+// NewAppWithServices constructs the application with explicit backing services.
+func NewAppWithServices(renderer *templates.Renderer, sessions *session.Manager, tables *table.Manager) *App {
+	if sessions == nil {
+		sessions = session.NewManager()
+	}
+	if tables == nil {
+		tables = table.NewManager()
+	}
+
 	return &App{
 		renderer:  renderer,
 		staticDir: filepath.Join(projectRoot(), "web", "static"),
-		sessions:  session.NewManager(),
-		tables:    table.NewManager(),
+		sessions:  sessions,
+		tables:    tables,
 	}
 }
 
@@ -64,6 +80,7 @@ func (a *App) Routes() stdhttp.Handler {
 	mux.HandleFunc("GET /", a.handleDashboard)
 	mux.HandleFunc("POST /tables", a.handleCreateTable)
 	mux.HandleFunc("DELETE /tables/{id}", a.handleDeleteTable)
+	mux.HandleFunc("GET /tables/{id}/stream", a.handleTableStream)
 	mux.Handle("GET /static/", stdhttp.StripPrefix("/static/", stdhttp.FileServer(stdhttp.Dir(a.staticDir))))
 
 	return mux
@@ -149,6 +166,93 @@ func (a *App) handleDeleteTable(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 		Kind:    "success",
 		Message: "Table removed.",
 	})
+}
+
+func (a *App) handleTableStream(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+	sess, err := a.sessions.GetOrCreate(w, r)
+	if err != nil {
+		stdhttp.Error(w, stdhttp.StatusText(stdhttp.StatusInternalServerError), stdhttp.StatusInternalServerError)
+		return
+	}
+
+	tableID := strings.TrimSpace(r.PathValue("id"))
+	if tableID == "" {
+		stdhttp.NotFound(w, r)
+		return
+	}
+
+	tbl, ok := a.tables.Get(tableID)
+	if !ok {
+		stdhttp.NotFound(w, r)
+		return
+	}
+	if tbl.SessionID != sess.ID || !a.sessions.OwnsTable(sess.ID, tableID) {
+		stdhttp.Error(w, stdhttp.StatusText(stdhttp.StatusForbidden), stdhttp.StatusForbidden)
+		return
+	}
+
+	runtime, ok := a.tables.Runtime(tableID)
+	if !ok {
+		stdhttp.NotFound(w, r)
+		return
+	}
+
+	flusher, ok := w.(stdhttp.Flusher)
+	if !ok {
+		stdhttp.Error(w, "streaming unsupported", stdhttp.StatusInternalServerError)
+		return
+	}
+
+	subscriberID, ch, err := runtime.Subscribe(0)
+	if err != nil {
+		stdhttp.Error(w, stdhttp.StatusText(stdhttp.StatusGone), stdhttp.StatusGone)
+		return
+	}
+	defer runtime.Unsubscribe(subscriberID)
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	snapshot := runtime.Snapshot()
+	replayed := make(map[string]struct{}, len(snapshot.History))
+	for _, event := range snapshot.History {
+		if err := writeSSEEvent(w, event); err != nil {
+			return
+		}
+		replayed[event.ID] = struct{}{}
+	}
+	flusher.Flush()
+
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-runtime.Context().Done():
+			return
+		case <-heartbeat.C:
+			if _, err := fmt.Fprint(w, ": keep-alive\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		case event, ok := <-ch:
+			if !ok {
+				return
+			}
+			if _, seen := replayed[event.ID]; seen {
+				delete(replayed, event.ID)
+				continue
+			}
+			if err := writeSSEEvent(w, event); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
 }
 
 func (a *App) createTable(sessionID string) error {
@@ -265,6 +369,19 @@ func humanizeRuntimeStatus(status string) string {
 	default:
 		return "Runtime pending"
 	}
+}
+
+func writeSSEEvent(w stdhttp.ResponseWriter, event sim.PokerEvent) error {
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+
+	if _, err := fmt.Fprintf(w, "id: %s\nevent: %s\ndata: %s\n\n", event.ID, event.Type, payload); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func projectRoot() string {

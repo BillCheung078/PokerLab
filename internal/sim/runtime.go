@@ -23,11 +23,11 @@ var (
 
 // PokerEvent is a simulated event emitted by a table runtime.
 type PokerEvent struct {
-	ID      string
-	TableID string
-	Type    string
-	Payload map[string]any
-	At      time.Time
+	ID      string         `json:"id"`
+	TableID string         `json:"table_id"`
+	Type    string         `json:"type"`
+	Payload map[string]any `json:"payload,omitempty"`
+	At      time.Time      `json:"at"`
 }
 
 // PlayerSeat stores one player slot in the materialized table state.
@@ -126,17 +126,10 @@ func (r *TableRuntime) Cancel() {
 
 		r.mu.Lock()
 		r.state.Status = "runtime_stopped"
-
-		channels := make([]chan PokerEvent, 0, len(r.subscribers))
-		for id, ch := range r.subscribers {
+		for id := range r.subscribers {
 			delete(r.subscribers, id)
-			channels = append(channels, ch)
 		}
 		r.mu.Unlock()
-
-		for _, ch := range channels {
-			close(ch)
-		}
 	})
 }
 
@@ -218,15 +211,10 @@ func (r *TableRuntime) Subscribe(buffer int) (string, <-chan PokerEvent, error) 
 // Unsubscribe removes one subscriber by identifier.
 func (r *TableRuntime) Unsubscribe(id string) {
 	r.mu.Lock()
-	ch, ok := r.subscribers[id]
-	if ok {
+	if _, ok := r.subscribers[id]; ok {
 		delete(r.subscribers, id)
 	}
 	r.mu.Unlock()
-
-	if ok {
-		close(ch)
-	}
 }
 
 func cloneState(state TableState) TableState {

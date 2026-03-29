@@ -1,13 +1,21 @@
 package http_test
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	apphttp "pokerlab/internal/http"
+	"pokerlab/internal/session"
+	"pokerlab/internal/sim"
+	"pokerlab/internal/table"
 	"pokerlab/internal/templates"
 )
 
@@ -181,6 +189,105 @@ func TestCreateTableRejectsNinthTable(t *testing.T) {
 	}
 }
 
+func TestTableStreamReplaysHistoryAndReceivesLiveEvents(t *testing.T) {
+	app, _, tables := newFastTestApp(t)
+
+	tableID, cookie := createTableWithHandler(t, app)
+
+	runtime, ok := tables.Runtime(tableID)
+	if !ok {
+		t.Fatalf("expected runtime for table %q", tableID)
+	}
+	waitFor(t, time.Second, func() bool { return len(runtime.Snapshot().History) >= 2 })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	req := httptest.NewRequest(http.MethodGet, "/tables/"+tableID+"/stream", nil).WithContext(ctx)
+	req.AddCookie(cookie)
+	rec := newStreamingRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		app.Routes().ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	waitFor(t, time.Second, func() bool { return rec.MessageCount() >= 2 })
+
+	if rec.StatusCode() != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.StatusCode(), http.StatusOK)
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "text/event-stream") {
+		t.Fatalf("Content-Type = %q, want text/event-stream", got)
+	}
+
+	messages := parseSSEMessages(rec.BodyString())
+	first := messages[0]
+
+	var replayEvent streamedPokerEvent
+	if err := json.Unmarshal([]byte(first.Data), &replayEvent); err != nil {
+		t.Fatalf("json.Unmarshal replay event error = %v", err)
+	}
+	if replayEvent.TableID != tableID {
+		t.Fatalf("replay event table_id = %q, want %q", replayEvent.TableID, tableID)
+	}
+
+	initialCount := rec.MessageCount()
+	waitFor(t, time.Second, func() bool { return rec.MessageCount() > initialCount })
+
+	cancel()
+	waitForClosed(t, done, time.Second)
+}
+
+func TestTableStreamRejectsWrongSession(t *testing.T) {
+	app, _, _ := newFastTestApp(t)
+
+	tableID, _ := createTableWithHandler(t, app)
+	_, otherCookie := createTableWithHandler(t, app)
+
+	req := httptest.NewRequest(http.MethodGet, "/tables/"+tableID+"/stream", nil)
+	req.AddCookie(otherCookie)
+	rec := httptest.NewRecorder()
+
+	app.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+}
+
+func TestTableStreamDisconnectCleansUpSubscriber(t *testing.T) {
+	app, _, tables := newFastTestApp(t)
+
+	tableID, cookie := createTableWithHandler(t, app)
+
+	runtime, ok := tables.Runtime(tableID)
+	if !ok {
+		t.Fatalf("expected runtime for table %q", tableID)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/tables/"+tableID+"/stream", nil).WithContext(ctx)
+	req.AddCookie(cookie)
+	rec := newStreamingRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		app.Routes().ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	waitFor(t, time.Second, func() bool { return rec.MessageCount() >= 1 })
+
+	waitFor(t, time.Second, func() bool { return runtime.Snapshot().SubscriberCount == 1 })
+
+	cancel()
+	waitForClosed(t, done, time.Second)
+
+	waitFor(t, time.Second, func() bool { return runtime.Snapshot().SubscriberCount == 0 })
+}
+
 func newTestApp(t *testing.T) *apphttp.App {
 	t.Helper()
 
@@ -190,6 +297,23 @@ func newTestApp(t *testing.T) *apphttp.App {
 	}
 
 	return apphttp.NewApp(renderer)
+}
+
+func newFastTestApp(t *testing.T) (*apphttp.App, *session.Manager, *table.Manager) {
+	t.Helper()
+
+	renderer, err := templates.New("web/templates/**/*.gohtml")
+	if err != nil {
+		t.Fatalf("templates.New() error = %v", err)
+	}
+
+	sessions := session.NewManager()
+	tables := table.NewManagerWithEngine(sim.NewEngineWithConfig(sim.EngineConfig{
+		IntraHandDelay: 5 * time.Millisecond,
+		HandPause:      5 * time.Millisecond,
+	}))
+
+	return apphttp.NewAppWithServices(renderer, sessions, tables), sessions, tables
 }
 
 func extractTableID(t *testing.T, html string) string {
@@ -202,4 +326,150 @@ func extractTableID(t *testing.T, html string) string {
 	}
 
 	return matches[1]
+}
+
+func createTableWithHandler(t *testing.T, app *apphttp.App) (string, *http.Cookie) {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodPost, "/tables", nil)
+	rec := httptest.NewRecorder()
+
+	app.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST /tables status = %d, want %d, body = %q", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+
+	cookies := rec.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatal("expected session cookie from create request")
+	}
+
+	return extractTableID(t, rec.Body.String()), cookies[0]
+}
+
+type streamedPokerEvent struct {
+	ID      string         `json:"id"`
+	TableID string         `json:"table_id"`
+	Type    string         `json:"type"`
+	Payload map[string]any `json:"payload"`
+	At      time.Time      `json:"at"`
+}
+
+func waitFor(t *testing.T, timeout time.Duration, predicate func() bool) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if predicate() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	t.Fatal("timed out waiting for condition")
+}
+
+func waitForClosed(t *testing.T, done <-chan struct{}, timeout time.Duration) {
+	t.Helper()
+
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		t.Fatal("timed out waiting for handler to stop")
+	}
+}
+
+type streamingRecorder struct {
+	header http.Header
+	body   bytes.Buffer
+	code   int
+	mu     sync.Mutex
+}
+
+func newStreamingRecorder() *streamingRecorder {
+	return &streamingRecorder{
+		header: make(http.Header),
+	}
+}
+
+func (r *streamingRecorder) Header() http.Header {
+	return r.header
+}
+
+func (r *streamingRecorder) Write(data []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.code == 0 {
+		r.code = http.StatusOK
+	}
+
+	return r.body.Write(data)
+}
+
+func (r *streamingRecorder) WriteHeader(statusCode int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.code = statusCode
+}
+
+func (r *streamingRecorder) Flush() {}
+
+func (r *streamingRecorder) StatusCode() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.code == 0 {
+		return http.StatusOK
+	}
+
+	return r.code
+}
+
+func (r *streamingRecorder) BodyString() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.body.String()
+}
+
+func (r *streamingRecorder) MessageCount() int {
+	return len(parseSSEMessages(r.BodyString()))
+}
+
+type sseMessage struct {
+	ID    string
+	Event string
+	Data  string
+}
+
+func parseSSEMessages(raw string) []sseMessage {
+	blocks := strings.Split(raw, "\n\n")
+	messages := make([]sseMessage, 0, len(blocks))
+
+	for _, block := range blocks {
+		block = strings.TrimSpace(block)
+		if block == "" || strings.HasPrefix(block, ":") {
+			continue
+		}
+
+		var msg sseMessage
+		for _, line := range strings.Split(block, "\n") {
+			switch {
+			case strings.HasPrefix(line, "id: "):
+				msg.ID = strings.TrimPrefix(line, "id: ")
+			case strings.HasPrefix(line, "event: "):
+				msg.Event = strings.TrimPrefix(line, "event: ")
+			case strings.HasPrefix(line, "data: "):
+				msg.Data = strings.TrimPrefix(line, "data: ")
+			}
+		}
+		if msg.ID != "" || msg.Event != "" || msg.Data != "" {
+			messages = append(messages, msg)
+		}
+	}
+
+	return messages
 }
