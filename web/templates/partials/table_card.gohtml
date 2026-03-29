@@ -42,6 +42,49 @@
     </div>
   </dl>
 
+  <section class="table-visual">
+    <div class="table-felt">
+      <div class="table-board-shell">
+        <p class="table-board-label" x-text="boardLabel()">Board waiting</p>
+        <div class="table-board-cards">
+          <template x-for="card in visibleBoardCards()" :key="'board-' + card">
+            <span class="playing-card" :class="cardClass(card)" x-text="cardDisplay(card)"></span>
+          </template>
+          <template x-for="slot in boardPlaceholders()" :key="'placeholder-' + slot">
+            <span class="playing-card playing-card-placeholder">?</span>
+          </template>
+        </div>
+      </div>
+
+      <div class="table-pot">
+        <span class="table-pot-label">Pot</span>
+      </div>
+
+      <template x-for="burst in betBursts" :key="burst.id">
+        <div class="bet-burst" :class="'bet-burst-seat-' + burst.seat" x-text="burst.label"></div>
+      </template>
+
+      <template x-for="player in players" :key="player.seat">
+        <div class="table-seat" :class="seatClass(player)">
+          <span class="table-seat-tag" x-text="'Seat ' + player.seat"></span>
+          <strong class="table-seat-name" x-text="player.name"></strong>
+          <p class="table-seat-stack" x-text="stackLabel(player)"></p>
+          <div class="table-seat-cards">
+            <template x-for="(card, index) in playerCards(player)" :key="'hole-' + player.seat + '-' + index">
+              <span
+                class="playing-card playing-card-small"
+                :class="card ? cardClass(card) : 'playing-card-placeholder'"
+                x-text="card ? cardDisplay(card) : '?'"
+              ></span>
+            </template>
+          </div>
+          <span class="table-seat-badge" x-text="seatBadge(player)"></span>
+        </div>
+      </template>
+    </div>
+    <p class="table-action-line" x-text="actionLine">Waiting for the next hand to begin.</p>
+  </section>
+
   <section class="table-feed" aria-live="polite">
     <div class="table-feed-header">
       <h4>Live Feed</h4>

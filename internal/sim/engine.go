@@ -22,18 +22,18 @@ type Engine struct {
 // NewEngine constructs the default local-development simulator.
 func NewEngine() *Engine {
 	return NewEngineWithConfig(EngineConfig{
-		IntraHandDelay: 250 * time.Millisecond,
-		HandPause:      900 * time.Millisecond,
+		IntraHandDelay: 550 * time.Millisecond,
+		HandPause:      1700 * time.Millisecond,
 	})
 }
 
 // NewEngineWithConfig constructs an engine with explicit pacing controls.
 func NewEngineWithConfig(config EngineConfig) *Engine {
 	if config.IntraHandDelay <= 0 {
-		config.IntraHandDelay = 250 * time.Millisecond
+		config.IntraHandDelay = 550 * time.Millisecond
 	}
 	if config.HandPause <= 0 {
-		config.HandPause = 900 * time.Millisecond
+		config.HandPause = 1700 * time.Millisecond
 	}
 
 	return &Engine{

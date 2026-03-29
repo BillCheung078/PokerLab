@@ -177,6 +177,10 @@
       eventCount: Number(config.initialEventCount || 0),
       connectionState: "connecting",
       connectionDetail: "Opening shared stream...",
+      actionLine: "Waiting for the next hand to begin.",
+      players: defaultPlayers(),
+      boardCards: [],
+      betBursts: [],
       events: [],
       unsubscribe: null,
       cleanupHandler: null,
@@ -264,11 +268,7 @@
       },
       applyEvent(event) {
         this.status = statusLabelForType(event.type);
-
-        if (event.type === "game_started") {
-          this.gameNumber = asNumber(event.payload.game_number, this.gameNumber);
-          this.blindLevel = asString(event.payload.blind_level) || this.blindLevel;
-        }
+        this.syncVisualState(event);
 
         if (shouldCountEvent(event, this.initialLastEventAt)) {
           this.eventCount += 1;
@@ -281,6 +281,97 @@
           timeLabel: formatTime(event.at),
         });
         this.events = this.events.slice(0, maxFeedItems);
+      },
+      syncVisualState(event) {
+        const payload = event.payload || {};
+
+        switch (event.type) {
+          case "game_started":
+            this.gameNumber = asNumber(payload.game_number, this.gameNumber);
+            this.blindLevel = asString(payload.blind_level) || this.blindLevel;
+            this.boardCards = [];
+            this.actionLine = "Hand #" + this.gameNumber + " has started.";
+            this.players = this.players.map((player) => ({
+              ...player,
+              active: false,
+              isActing: false,
+              isWinner: false,
+              cards: [],
+              lastAction: "",
+            }));
+            break;
+          case "players_joined":
+            this.players = this.players.map((player, index) => ({
+              ...player,
+              name: Array.isArray(payload.players) && payload.players[index] ? asString(payload.players[index]) : player.name,
+              active: true,
+              lastAction: "Ready",
+            }));
+            this.actionLine = "Players are seated and waiting for the deal.";
+            break;
+          case "card_dealt":
+            this.players = this.players.map((player) => {
+              if (player.seat !== asNumber(payload.seat, player.seat)) {
+                return player;
+              }
+              return {
+                ...player,
+                active: true,
+                isActing: false,
+                cards: normalizeCards(payload.cards),
+                lastAction: "Cards dealt",
+              };
+            });
+            this.actionLine = "Pocket cards are on the table.";
+            break;
+          case "bet_action":
+            this.players = this.players.map((player) => {
+              const actingSeat = asNumber(payload.seat, 0);
+              const action = humanizeToken(asString(payload.action) || "acted");
+              const amount = asNumber(payload.amount, 0);
+              if (player.seat !== actingSeat) {
+                return {
+                  ...player,
+                  isActing: false,
+                };
+              }
+              return {
+                ...player,
+                isActing: true,
+                active: true,
+                lastAction: action + amountSuffix(payload.amount),
+              };
+            });
+            this.triggerBetBurst(asNumber(payload.seat, 0), asNumber(payload.amount, 0));
+            this.actionLine =
+              "Seat " +
+              asNumber(payload.seat, 0) +
+              " " +
+              humanizeToken(asString(payload.action) || "acted") +
+              amountSuffix(payload.amount) +
+              ".";
+            break;
+          case "community_cards":
+            this.boardCards = normalizeCards(payload.cards);
+            this.players = this.players.map((player) => ({
+              ...player,
+              isActing: false,
+            }));
+            this.actionLine = communityStreetLabel(payload.street) + " is on the board.";
+            break;
+          case "hand_result":
+            this.players = this.players.map((player) => ({
+              ...player,
+              isActing: false,
+              isWinner: player.seat === asNumber(payload.winner_seat, -1),
+              lastAction: player.seat === asNumber(payload.winner_seat, -1) ? "Winner" : player.lastAction,
+            }));
+            this.actionLine = asString(payload.summary) || "Hand complete.";
+            break;
+          default:
+            this.actionLine = "Table event received.";
+            break;
+        }
       },
       connectionLabel() {
         switch (this.connectionState) {
@@ -309,6 +400,86 @@
         }
         return "Latest " + this.events.length + " events";
       },
+      seatClass(player) {
+        let className = "seat-" + player.seat;
+        if (player.active) {
+          className += " seat-active";
+        }
+        if (player.isActing) {
+          className += " seat-acting";
+        }
+        if (player.isWinner) {
+          className += " seat-winner";
+        }
+        return className;
+      },
+      seatBadge(player) {
+        if (player.isWinner) {
+          return "Winner";
+        }
+        if (player.isActing) {
+          return "Acting";
+        }
+        return player.lastAction || "Ready";
+      },
+      boardLabel() {
+        if (this.boardCards.length === 0) {
+          return "Board waiting";
+        }
+        return "Community board";
+      },
+      visibleBoardCards() {
+        return this.boardCards;
+      },
+      boardPlaceholders() {
+        return Array.from({ length: Math.max(0, 5 - this.boardCards.length) }, (_, index) => index);
+      },
+      cardDisplay(card) {
+        const text = asString(card);
+        if (!text) {
+          return "??";
+        }
+
+        const rank = text.slice(0, -1) || text;
+        const suit = suitSymbol(text.slice(-1));
+        return rank + suit;
+      },
+      cardClass(card) {
+        const suit = asString(card).slice(-1).toLowerCase();
+        if (suit === "h" || suit === "d") {
+          return "playing-card-red";
+        }
+        return "playing-card-dark";
+      },
+      playerCards(player) {
+        const cards = normalizeCards(player.cards);
+        if (cards.length === 0) {
+          return ["", ""];
+        }
+        if (cards.length === 1) {
+          return [cards[0], ""];
+        }
+        return cards.slice(0, 2);
+      },
+      stackLabel(player) {
+        return player.stack + " BB";
+      },
+      triggerBetBurst(seat, amount) {
+        if (!seat || amount <= 0) {
+          return;
+        }
+
+        const id = "burst_" + seat + "_" + Date.now() + "_" + Math.floor(Math.random() * 1000);
+        this.betBursts.push({
+          id,
+          seat,
+          label: amount + " BB",
+        });
+
+        window.setTimeout(() => {
+          this.betBursts = this.betBursts.filter((burst) => burst.id !== id);
+        }, 950);
+      },
     };
   }
 
@@ -330,18 +501,14 @@
     registerAlpineData();
   }
 
-  document.body.addEventListener("htmx:afterSwap", (browserEvent) => {
-    if (!window.Alpine || typeof window.Alpine.initTree !== "function") {
-      return;
-    }
-
-    const target = browserEvent.target;
-    if (!(target instanceof Element)) {
-      return;
-    }
-
-    window.Alpine.initTree(target);
-  });
+  function defaultPlayers() {
+    return [
+      { seat: 1, name: "Avery", stack: 100, active: false, isActing: false, isWinner: false, cards: [], lastAction: "" },
+      { seat: 2, name: "Blake", stack: 100, active: false, isActing: false, isWinner: false, cards: [], lastAction: "" },
+      { seat: 3, name: "Casey", stack: 100, active: false, isActing: false, isWinner: false, cards: [], lastAction: "" },
+      { seat: 4, name: "Devon", stack: 100, active: false, isActing: false, isWinner: false, cards: [], lastAction: "" },
+    ];
+  }
 
   function parseEventPayload(message, fallbackType) {
     let parsed;
@@ -464,6 +631,14 @@
     return cards.map((card) => asString(card)).filter(Boolean).join(" ");
   }
 
+  function normalizeCards(cards) {
+    if (!Array.isArray(cards)) {
+      return [];
+    }
+
+    return cards.map((card) => asString(card)).filter(Boolean);
+  }
+
   function amountSuffix(amount) {
     const numeric = asNumber(amount, 0);
     if (numeric <= 0) {
@@ -477,6 +652,21 @@
     return asString(value)
       .replace(/_/g, " ")
       .replace(/\b\w/g, (char) => char.toUpperCase());
+  }
+
+  function suitSymbol(suit) {
+    switch (asString(suit).toLowerCase()) {
+      case "h":
+        return "♥";
+      case "d":
+        return "♦";
+      case "c":
+        return "♣";
+      case "s":
+        return "♠";
+      default:
+        return "";
+    }
   }
 
   function asString(value) {
