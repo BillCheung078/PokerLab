@@ -1,0 +1,12 @@
+.DS_Store
+**/.DS_Store
+
+# Go build and test artifacts
+bin/
+dist/
+coverage.out
+*.test
+
+# IDE/editor files
+.vscode/
+.idea/
